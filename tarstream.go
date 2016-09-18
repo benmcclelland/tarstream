@@ -5,13 +5,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"newar/logger"
 	"os"
 
 	"github.com/pkg/errors"
 )
-
-var log = logger.InitLogger()
 
 // TarVec is an array of datavecs representing a tarball
 type TarVec struct {
@@ -56,7 +53,6 @@ func (tv *TarVec) Read(b []byte) (int, error) {
 			err := dv.Open()
 			// XXX if os.IsNotExist(err), return 0s?
 			if err != nil {
-				log.Printf("E opening vec: %v", err)
 				return 0, errors.Wrap(err, fmt.Sprintf("opening vec"))
 			}
 			defer dv.Close()
