@@ -1,0 +1,177 @@
+package tarstream
+
+import (
+	"archive/tar"
+	"bytes"
+	"fmt"
+	"io"
+	"newar/logger"
+	"os"
+
+	"github.com/pkg/errors"
+)
+
+var log = logger.InitLogger()
+
+// TarVec is an array of datavecs representing a tarball
+type TarVec struct {
+	Dvecs []Datavec
+	Pos   int64
+	Size  int64
+}
+
+// PositionInfo stores information on where files get placed in the tarball
+type PositionInfo struct {
+	Name   string
+	Offset int64
+}
+
+// GetSize gets the size of the tarball represented by the tarvec
+func (tv TarVec) GetSize() int64 {
+	return tv.Size
+}
+
+// set the size field in the tarvec to represent
+// what the tarball size will be
+func (tv *TarVec) setSize() {
+	tv.Size = 0
+	for _, dv := range tv.Dvecs {
+		tv.Size += dv.GetSize()
+	}
+}
+
+// Read the data represented by the tarvec
+func (tv *TarVec) Read(b []byte) (int, error) {
+	off := int64(0)
+	// loop through the datavecs to find our current position
+	// then start reading when we find it
+	// we will fill the buffer with either the buffersize
+	// amount of data or the rest of the current datavec,
+	// whichever is less
+	for _, dv := range tv.Dvecs {
+		size := dv.GetSize()
+		if off+size <= tv.Pos {
+			off += size
+		} else {
+			err := dv.Open()
+			// XXX if os.IsNotExist(err), return 0s?
+			if err != nil {
+				log.Printf("E opening vec: %v", err)
+				return 0, errors.Wrap(err, fmt.Sprintf("opening vec"))
+			}
+			defer dv.Close()
+
+			n, err := dv.ReadAt(b, tv.Pos-off)
+			tv.Pos += int64(n)
+			return n, err
+		}
+	}
+	return 0, io.EOF
+}
+
+// Seek the virtual offset of the tarvec
+func (tv *TarVec) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case os.SEEK_SET:
+		if offset < 0 {
+			return 0, os.ErrInvalid
+		}
+		tv.Pos = offset
+		return tv.Pos, nil
+	case os.SEEK_CUR:
+		if tv.Pos+offset < 0 {
+			return 0, os.ErrInvalid
+		}
+		tv.Pos += offset
+		return tv.Pos, nil
+	case os.SEEK_END:
+		if tv.Size+offset < 0 {
+			return 0, os.ErrInvalid
+		}
+		tv.Pos = tv.Size + offset
+		return tv.Pos, nil
+	}
+	return 0, os.ErrInvalid
+}
+
+// GenVec generates the tarvec and archinfo from a list of files
+func GenVec(files []string) (TarVec, []PositionInfo, error) {
+	var tv TarVec
+	archinfo := make([]PositionInfo, len(files))
+
+	for i, file := range files {
+		// book keeping for file offsets within archive file
+		archinfo[i].Name = file
+		archinfo[i].Offset = tv.Size
+
+		fi, err := os.Lstat(file)
+		if err != nil {
+			continue
+		}
+
+		// create buffer to write tar header to
+		buf := new(bytes.Buffer)
+		tw := tar.NewWriter(buf)
+
+		// generate tar header from file stat info
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return TarVec{}, []PositionInfo{},
+				errors.Wrap(err, fmt.Sprintf("generating header %v", file))
+		}
+
+		// write tar header to buffer
+		err = tw.WriteHeader(hdr)
+		if err != nil {
+			return TarVec{}, []PositionInfo{},
+				errors.Wrap(err, fmt.Sprintf("writing header %v", file))
+		}
+
+		memv := memVec{
+			Data: buf.Bytes(),
+		}
+
+		// add the tar header mem buffer to the tarvec
+		tv.Dvecs = append(tv.Dvecs, memv)
+		tv.Size += memv.GetSize()
+
+		pathv := pathVec{
+			Path: file,
+			info: fi,
+		}
+
+		// add the file path info to the tarvec
+		tv.Dvecs = append(tv.Dvecs, &pathv)
+		tv.Size += pathv.GetSize()
+
+		// tar requires file entries to be padded out to
+		// 512 byte offset
+		// if needed, record how much padding is needed
+		// and add to the tarvec
+		if fi.Size()%512 != 0 {
+			padv := padVec{
+				Size: 512 - (fi.Size() % 512),
+			}
+
+			tv.Dvecs = append(tv.Dvecs, padv)
+			tv.Size += padv.GetSize()
+		}
+	}
+
+	tv.setSize()
+	tv.Pos = 0
+	return tv, archinfo, nil
+}
+
+// Validate gets and validates the next header within the tarfile
+func Validate(r io.Reader) (*tar.Header, error) {
+	tr := tar.NewReader(r)
+	// Next will find the next header and read it in
+	// this skips all meta-headers like long names, etc
+	// hopefully thats what we want here
+	hdr, err := tr.Next()
+	if err != nil {
+		return &tar.Header{}, errors.Wrap(err, fmt.Sprintf("read header"))
+	}
+	return hdr, nil
+}
