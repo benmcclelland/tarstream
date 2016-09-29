@@ -90,7 +90,7 @@ func (tv *TarVec) Seek(offset int64, whence int) (int64, error) {
 	return 0, os.ErrInvalid
 }
 
-// GenVec generates the tarvec and archinfo from a list of files
+// GenVec generates the tarvec and positioninfo from a list of files
 func GenVec(files []string) (TarVec, []PositionInfo, error) {
 	var tv TarVec
 	archinfo := make([]PositionInfo, len(files))
