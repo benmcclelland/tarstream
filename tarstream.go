@@ -21,6 +21,7 @@ type TarVec struct {
 type PositionInfo struct {
 	Name   string
 	Offset int64
+	Size   int64
 }
 
 // GetSize gets the size of the tarball represented by the tarvec
@@ -93,17 +94,18 @@ func (tv *TarVec) Seek(offset int64, whence int) (int64, error) {
 // GenVec generates the tarvec and positioninfo from a list of files
 func GenVec(files []string) (TarVec, []PositionInfo, error) {
 	var tv TarVec
-	archinfo := make([]PositionInfo, len(files))
+	pinfo := make([]PositionInfo, len(files))
 
 	for i, file := range files {
 		// book keeping for file offsets within archive file
-		archinfo[i].Name = file
-		archinfo[i].Offset = tv.Size
+		pinfo[i].Name = file
+		pinfo[i].Offset = tv.Size
 
 		fi, err := os.Lstat(file)
 		if err != nil {
 			continue
 		}
+		pinfo[i].Size = fi.Size()
 
 		// create buffer to write tar header to
 		buf := new(bytes.Buffer)
@@ -156,7 +158,7 @@ func GenVec(files []string) (TarVec, []PositionInfo, error) {
 
 	tv.setSize()
 	tv.Pos = 0
-	return tv, archinfo, nil
+	return tv, pinfo, nil
 }
 
 // Validate gets and validates the next header within the tarfile
